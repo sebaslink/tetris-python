@@ -52,36 +52,60 @@ def conectar_firebase():
     firebase_conectado = False
     return False
 
+URL_RENDER_SERVER = "https://tetris-python.onrender.com"
+
 def guardar_puntaje_firebase(nombre_jugador, puntaje):
-    if not conectar_firebase() or db_firebase is None:
-        return False
+    if conectar_firebase() and db_firebase is not None:
+        try:
+            from firebase_admin import firestore
+            ts = getattr(firestore, "SERVER_TIMESTAMP", None)
+            db_firebase.collection("puntuaciones").add({
+                "jugador": nombre_jugador,
+                "puntuacion": int(puntaje),
+                "fecha": ts
+            })
+            return True
+        except Exception:
+            pass
+
     try:
-        from firebase_admin import firestore
-        ts = getattr(firestore, "SERVER_TIMESTAMP", None)
-        db_firebase.collection("puntuaciones").add({
-            "jugador": nombre_jugador,
-            "puntuacion": int(puntaje),
-            "fecha": ts
-        })
-        return True
+        import urllib.request, json
+        req = urllib.request.Request(
+            f"{URL_RENDER_SERVER}/api/scores",
+            data=json.dumps({"jugador": nombre_jugador, "puntuacion": int(puntaje)}).encode('utf-8'),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status == 200
     except Exception:
         return False
 
 def obtener_ranking_firebase():
-    if not conectar_firebase() or db_firebase is None:
-        return []
+    if conectar_firebase() and db_firebase is not None:
+        try:
+            from firebase_admin import firestore
+            q_class = getattr(firestore, "Query", None)
+            desc_dir = getattr(q_class, "DESCENDING", "DESCENDING") if q_class else "DESCENDING"
+            query = db_firebase.collection("puntuaciones").order_by("puntuacion", direction=desc_dir).limit(5)
+            docs = query.stream()
+            ranking = []
+            for doc in docs:
+                data = doc.to_dict() if hasattr(doc, "to_dict") else {}
+                if isinstance(data, dict):
+                    ranking.append((str(data.get("jugador", "Jugador")), int(data.get("puntuacion", 0))))
+            if ranking:
+                return ranking
+        except Exception:
+            pass
+
     try:
-        from firebase_admin import firestore
-        q_class = getattr(firestore, "Query", None)
-        desc_dir = getattr(q_class, "DESCENDING", "DESCENDING") if q_class else "DESCENDING"
-        query = db_firebase.collection("puntuaciones").order_by("puntuacion", direction=desc_dir).limit(5)
-        docs = query.stream()
-        ranking = []
-        for doc in docs:
-            data = doc.to_dict() if hasattr(doc, "to_dict") else {}
-            if isinstance(data, dict):
-                ranking.append((str(data.get("jugador", "Jugador")), int(data.get("puntuacion", 0))))
-        return ranking
+        import urllib.request, json
+        with urllib.request.urlopen(f"{URL_RENDER_SERVER}/api/scores", timeout=3) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            ranking = []
+            for item in data.get("scores", []):
+                ranking.append((item.get("jugador", "Jugador"), item.get("puntuacion", 0)))
+            return ranking
     except Exception:
         return []
 
