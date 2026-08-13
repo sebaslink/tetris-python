@@ -73,7 +73,7 @@ def guardar_puntaje_firebase(nombre_jugador, puntaje):
             pass
 
     try:
-        import urllib.request, json
+        import urllib.request
         req = urllib.request.Request(
             f"{URL_RENDER_SERVER}/api/scores",
             data=json.dumps({"jugador": nombre_jugador, "puntuacion": int(puntaje)}).encode('utf-8'),
@@ -103,7 +103,7 @@ def obtener_ranking_firebase():
             pass
 
     try:
-        import urllib.request, json
+        import urllib.request
         with urllib.request.urlopen(f"{URL_RENDER_SERVER}/api/scores", timeout=3) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             ranking = []
@@ -897,7 +897,7 @@ def crear_sala_online():
             pass
     else:
         try:
-            import urllib.request, json
+            import urllib.request
             req = urllib.request.Request(
                 f"{URL_RENDER_SERVER}/api/salas/crear",
                 data=json.dumps({"codigo": codigo}).encode('utf-8'),
@@ -931,7 +931,7 @@ def vincular_sala_online():
             pass
     else:
         try:
-            import urllib.request, json
+            import urllib.request
             req = urllib.request.Request(
                 f"{URL_RENDER_SERVER}/api/salas/unirse",
                 data=json.dumps({"codigo": codigo}).encode('utf-8'),
@@ -1035,7 +1035,7 @@ def bucle_espera_y_sync():
                 pass
         else:
             try:
-                import urllib.request, json
+                import urllib.request
                 if estado_sala_online == "ESPERANDO":
                     req = urllib.request.Request(f"{URL_RENDER_SERVER}/api/salas/{codigo_sala_actual}")
                     with urllib.request.urlopen(req, timeout=3) as resp:
