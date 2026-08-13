@@ -1,5 +1,7 @@
 import tkinter as tk
+from tkinter import simpledialog, messagebox
 import random
+import json
 import winsound
 import threading
 import os
@@ -34,8 +36,10 @@ def conectar_firebase():
             if "firebase" in f.lower() or "service" in f.lower() or f.lower() == "firebase_key.json":
                 archivo_credencial = f
                 break
-        if not archivo_credencial and archivos_json:
-            archivo_credencial = archivos_json[0]
+        if not archivo_credencial:
+            archivos_validos = [f for f in archivos_json if "pyright" not in f.lower()]
+            if archivos_validos:
+                archivo_credencial = archivos_validos[0]
             
         if archivo_credencial and os.path.exists(archivo_credencial):
             if not firebase_admin._apps:
@@ -254,7 +258,7 @@ Estado y variables para Modo Versus (Doble Pantalla / Tetris 99)
 """
 modo_juego = "SOLO"
 
-tablero_rival = [[0 for _ in range(COLUMNAS)] for _ in range(FILAS)]
+tablero_rival: list[list[int | str]] = [[0 for _ in range(COLUMNAS)] for _ in range(FILAS)]
 nombre_pieza_rival = random.choice(list(PIEZAS.keys()))
 nombre_siguiente_rival = random.choice(list(PIEZAS.keys()))
 pieza_actual_rival = PIEZAS[nombre_pieza_rival]
@@ -269,6 +273,13 @@ msg_ataque_p1 = ""
 msg_ataque_p1_tiempo = 0.0
 msg_ataque_rival = ""
 msg_ataque_rival_tiempo = 0.0
+
+codigo_sala_actual = ""
+es_anfitrion_sala = True
+estado_sala_online = "DESCONECTADO"
+basura_pendiente_enviar = 0
+hilo_sync_online = None
+stop_sync_online = False
 
 _cache_img_menu = None
 _cache_menu_size = (0, 0)
@@ -339,9 +350,23 @@ def detener_musica():
     global cancion_reproduciendose
     try:
         winmm.mciSendStringW('close bgm', None, 0, 0)
+        winmm.mciSendStringW('close sfx_audio', None, 0, 0)
         cancion_reproduciendose = None
     except Exception:
         pass
+
+def reproducir_audio_efecto(nombre_archivo):
+    if not sonido_activado or not nombre_archivo:
+        return
+    ruta = os.path.abspath(os.path.join(directorio_musica, nombre_archivo))
+    if os.path.exists(ruta):
+        try:
+            detener_musica()
+            winmm.mciSendStringW('close sfx_audio', None, 0, 0)
+            winmm.mciSendStringW(f'open "{ruta}" type mpegvideo alias sfx_audio', None, 0, 0)
+            winmm.mciSendStringW('play sfx_audio', None, 0, 0)
+        except Exception:
+            pass
 
 def reproducir_musica_por_nombre(nombre_cancion):
     global cancion_reproduciendose
@@ -607,6 +632,8 @@ def fijar_pieza_rival():
 
     if not es_valido_rival(pieza_actual_rival, pos_x_rival, pos_y_rival):
         juego_terminado_rival = True
+        if not juego_terminado:
+            reproducir_audio_efecto("victoria.mp3")
         redibujar()
 
 def limpiar_filas_rival():
@@ -614,7 +641,8 @@ def limpiar_filas_rival():
     nuevas = [f for f in tablero_rival if any(v == 0 for v in f)]
     eliminadas = FILAS - len(nuevas)
     if eliminadas > 0:
-        tablero_rival = [[0 for _ in range(COLUMNAS)] for _ in range(eliminadas)] + nuevas
+        filas_vacias: list[list[int | str]] = [[0 for _ in range(COLUMNAS)] for _ in range(eliminadas)]
+        tablero_rival = filas_vacias + nuevas
         lineas_rival += eliminadas
         puntuacion_rival += eliminadas * 150
 
@@ -834,44 +862,261 @@ def dibujar_menu_principal():
     dibujar_boton(coords_btn_online[0], coords_btn_online[1], coords_btn_online[2], coords_btn_online[3], "MODO ONLINE", "#ff007f", color_fondo="#0d091a", font_size=font_btn)
     dibujar_boton(coords_btn_ajustes[0], coords_btn_ajustes[1], coords_btn_ajustes[2], coords_btn_ajustes[3], "AJUSTES", "#ffd700", color_fondo="#0d091a", font_size=font_btn)
 
+"""
+Funciones y Logica de Salas Online
+"""
+def generar_codigo_sala():
+    return str(random.randint(1000, 9999))
+
+def crear_sala_online():
+    global codigo_sala_actual, es_anfitrion_sala, estado_sala_online, stop_sync_online, hilo_sync_online
+    codigo = generar_codigo_sala()
+    codigo_sala_actual = codigo
+    es_anfitrion_sala = True
+    estado_sala_online = "ESPERANDO"
+    stop_sync_online = False
+
+    conectar_firebase()
+    if firebase_conectado and db_firebase is not None:
+        try:
+            tab_init = json.dumps([[0]*COLUMNAS for _ in range(FILAS)])
+            db_firebase.collection("salas").document(codigo).set({
+                "codigo": codigo,
+                "estado": "ESPERANDO",
+                "p1_tablero": tab_init,
+                "p1_puntuacion": 0,
+                "p1_basura": 0,
+                "p1_terminado": False,
+                "p2_tablero": tab_init,
+                "p2_puntuacion": 0,
+                "p2_basura": 0,
+                "p2_terminado": False,
+                "fecha": time.time()
+            })
+        except Exception:
+            pass
+    else:
+        try:
+            import urllib.request, json
+            req = urllib.request.Request(
+                f"{URL_RENDER_SERVER}/api/salas/crear",
+                data=json.dumps({"codigo": codigo}).encode('utf-8'),
+                headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            pass
+
+    hilo_sync_online = threading.Thread(target=bucle_espera_y_sync, daemon=True)
+    hilo_sync_online.start()
+    redibujar()
+
+def vincular_sala_online():
+    global codigo_sala_actual, es_anfitrion_sala, estado_sala_online, stop_sync_online, hilo_sync_online
+    codigo = simpledialog.askstring("Vincular Sala Online", "Ingresa el Código de Sala (4 dígitos):")
+    if not codigo:
+        return
+    codigo = codigo.strip()
+
+    conectar_firebase()
+    exito = False
+    if firebase_conectado and db_firebase is not None:
+        try:
+            doc_ref = db_firebase.collection("salas").document(codigo)
+            doc = doc_ref.get()
+            if doc.exists:
+                doc_ref.update({"estado": "JUGANDO"})
+                exito = True
+        except Exception:
+            pass
+    else:
+        try:
+            import urllib.request, json
+            req = urllib.request.Request(
+                f"{URL_RENDER_SERVER}/api/salas/unirse",
+                data=json.dumps({"codigo": codigo}).encode('utf-8'),
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status == 200:
+                    exito = True
+        except Exception:
+            pass
+
+    if exito:
+        codigo_sala_actual = codigo
+        es_anfitrion_sala = False
+        estado_sala_online = "JUGANDO"
+        stop_sync_online = False
+        iniciar_modo_versus_online()
+        hilo_sync_online = threading.Thread(target=bucle_espera_y_sync, daemon=True)
+        hilo_sync_online.start()
+    else:
+        messagebox.showerror("Error de Vinculación", f"No se pudo encontrar o vincular a la sala {codigo}.")
+
+def cancelar_sala_online():
+    global estado_sala_online, codigo_sala_actual, stop_sync_online
+    stop_sync_online = True
+    estado_sala_online = "DESCONECTADO"
+    codigo_sala_actual = ""
+    redibujar()
+
+def iniciar_modo_versus_online():
+    global modo_juego, estado_pantalla, juego_en_pausa, tablero_rival, puntuacion_rival, lineas_rival, juego_terminado_rival
+    modo_juego = "VERSUS"
+    estado_pantalla = "JUEGO"
+    juego_en_pausa = False
+    reiniciar_juego()
+
+    tablero_rival = [[0 for _ in range(COLUMNAS)] for _ in range(FILAS)]
+    puntuacion_rival = 0
+    lineas_rival = 0
+    juego_terminado_rival = False
+
+    actualizar_musica_estado()
+    caer()
+
+def enviar_basura_online(cant):
+    global basura_pendiente_enviar
+    basura_pendiente_enviar += cant
+
+def bucle_espera_y_sync():
+    global estado_sala_online, tablero_rival, puntuacion_rival, juego_terminado_rival, stop_sync_online, basura_pendiente_enviar
+    rol = "p1" if es_anfitrion_sala else "p2"
+    rol_rival = "p2" if es_anfitrion_sala else "p1"
+
+    while not stop_sync_online:
+        time.sleep(0.25)
+        if not codigo_sala_actual:
+            break
+
+        if firebase_conectado and db_firebase is not None:
+            try:
+                doc_ref = db_firebase.collection("salas").document(codigo_sala_actual)
+                doc = doc_ref.get()
+                if doc.exists:
+                    data = doc.to_dict() or {}
+                    st = data.get("estado", "ESPERANDO")
+                    if estado_sala_online == "ESPERANDO" and st == "JUGANDO":
+                        estado_sala_online = "JUGANDO"
+                        root.after(0, iniciar_modo_versus_online)
+
+                    if estado_pantalla == "JUEGO":
+                        upd = {
+                            f"{rol}_tablero": json.dumps(tablero),
+                            f"{rol}_puntuacion": puntuacion,
+                            f"{rol}_terminado": juego_terminado
+                        }
+                        if basura_pendiente_enviar > 0:
+                            upd[f"{rol_rival}_basura"] = data.get(f"{rol_rival}_basura", 0) + basura_pendiente_enviar
+                            basura_pendiente_enviar = 0
+                        doc_ref.update(upd)
+
+                        riv_tab_raw = data.get(f"{rol_rival}_tablero")
+                        if riv_tab_raw:
+                            if isinstance(riv_tab_raw, str):
+                                tablero_rival = json.loads(riv_tab_raw)
+                            elif isinstance(riv_tab_raw, list):
+                                tablero_rival = riv_tab_raw
+                        puntuacion_rival = data.get(f"{rol_rival}_puntuacion", puntuacion_rival)
+
+                        riv_term = data.get(f"{rol_rival}_terminado", False)
+                        if riv_term and not juego_terminado_rival:
+                            juego_terminado_rival = True
+                            if not juego_terminado:
+                                root.after(0, lambda: reproducir_audio_efecto("victoria.mp3"))
+
+                        basura_recibida = data.get(f"{rol}_basura", 0)
+                        if basura_recibida > 0:
+                            doc_ref.update({f"{rol}_basura": 0})
+                            root.after(0, lambda b=basura_recibida: agregar_lineas_basura(tablero, b))
+                        root.after(0, redibujar)
+            except Exception:
+                pass
+        else:
+            try:
+                import urllib.request, json
+                if estado_sala_online == "ESPERANDO":
+                    req = urllib.request.Request(f"{URL_RENDER_SERVER}/api/salas/{codigo_sala_actual}")
+                    with urllib.request.urlopen(req, timeout=3) as resp:
+                        res = json.loads(resp.read().decode('utf-8'))
+                        if res.get("sala", {}).get("estado") == "JUGANDO":
+                            estado_sala_online = "JUGANDO"
+                            root.after(0, iniciar_modo_versus_online)
+                elif estado_pantalla == "JUEGO":
+                    payload_dict = {
+                        "codigo": codigo_sala_actual,
+                        "rol": rol,
+                        "tablero": tablero,
+                        "puntuacion": puntuacion,
+                        "terminado": juego_terminado
+                    }
+                    if basura_pendiente_enviar > 0:
+                        payload_dict["basura"] = basura_pendiente_enviar
+                        basura_pendiente_enviar = 0
+
+                    req = urllib.request.Request(
+                        f"{URL_RENDER_SERVER}/api/salas/actualizar",
+                        data=json.dumps(payload_dict).encode('utf-8'),
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=3) as resp:
+                        res = json.loads(resp.read().decode('utf-8'))
+                        datos = res.get("datos", {})
+                        riv_tab = datos.get("tablero_rival")
+                        if riv_tab and isinstance(riv_tab, list):
+                            tablero_rival = riv_tab
+                        puntuacion_rival = datos.get("puntuacion_rival", puntuacion_rival)
+                        bas = datos.get("basura", 0)
+                        if bas > 0:
+                            root.after(0, lambda b=bas: agregar_lineas_basura(tablero, b))
+                        root.after(0, redibujar)
+            except Exception:
+                pass
+
 def dibujar_pantalla_online():
     off_x, off_y, cw, ch = obtener_offset_pantalla()
     canvas.create_rectangle(0, 0, cw, ch, fill="#121218", outline="")
-    canvas.create_text(cw // 2, off_y + 35, text="MODO VERSUS / TETRIS 99", fill="#ff007f", font=("Arial", 20, "bold"))
+    canvas.create_text(cw // 2, off_y + 35, text="MULTIJUGADOR ONLINE Y LOCAL", fill="#ff007f", font=("Arial", 20, "bold"))
 
-    # Tarjeta de Reglas de Combate
-    canvas.create_rectangle(off_x + 30, off_y + 60, off_x + 450, off_y + 240, fill="#1c1c2b", outline="#ff007f", width=2)
-    canvas.create_text(cw // 2, off_y + 80, text="⚔️ REGLAS DE COMBATE (ESTILO TETRIS 99)", fill="#ffd700", font=("Arial", 11, "bold"))
+    if estado_sala_online == "ESPERANDO":
+        canvas.create_rectangle(off_x + 30, off_y + 70, off_x + 450, off_y + 360, fill="#1c1c2b", outline="#00e5ff", width=2)
+        canvas.create_text(cw // 2, off_y + 105, text="👑 SALA CREADA CON ÉXITO", fill="#ffd700", font=("Arial", 14, "bold"))
+        canvas.create_text(cw // 2, off_y + 145, text="CÓDIGO DE SALA:", fill="#ffffff", font=("Arial", 10, "bold"))
+        canvas.create_rectangle(cw // 2 - 120, off_y + 170, cw // 2 + 120, off_y + 230, fill="#0d091a", outline="#ff007f", width=2)
+        canvas.create_text(cw // 2, off_y + 200, text=codigo_sala_actual, fill="#00e5ff", font=("Arial", 28, "bold"))
 
-    reglas = [
-        ("• 2 Líneas (Doble):", "💣 Envia 1 Línea de Basura al rival"),
-        ("• 3 Líneas (Triple):", "💣 Envia 2 Líneas de Basura al rival"),
-        ("• 4 Líneas (Tetris):", "💣 Envia 4 Líneas de Basura al rival"),
-        ("• Combos Seguidos:", "💣 +1 Línea extra de basura por combo")
-    ]
-    y_reg = off_y + 110
-    for lab, val in reglas:
-        canvas.create_text(off_x + 50, y_reg, text=lab, fill="#ffffff", font=("Arial", 9, "bold"), anchor="w")
-        canvas.create_text(off_x + 210, y_reg, text=val, fill="#00e5ff", font=("Arial", 9), anchor="w")
-        y_reg += 26
+        canvas.create_text(cw // 2, off_y + 265, text="Comparte este código de 4 dígitos con tu rival.", fill="#a0a0c0", font=("Arial", 9))
+        canvas.create_text(cw // 2, off_y + 295, text="⏳ Esperando que el rival se vincule...", fill="#ffd700", font=("Arial", 10, "bold"))
 
-    dibujar_boton(off_x + 60, off_y + 255, off_x + 420, off_y + 310, "⚔️ INICIAR MODO VERSUS (DOBLE PANTALLA)", "#ff007f", font_size=10)
-
-    conectar_firebase()
-    if firebase_conectado:
-        canvas.create_text(cw // 2, off_y + 335, text="🟢 CONECTADO A FIREBASE FIRESTORE", fill="#00ff88", font=("Arial", 9, "bold"))
-        ranking = obtener_ranking_firebase()
-        if ranking:
-            canvas.create_text(cw // 2, off_y + 360, text="TOP 3 GLOBAL FIRESTORE:", fill="#ffffff", font=("Arial", 8, "bold"))
-            y_r = off_y + 380
-            for idx, (jug, pts) in enumerate(ranking[:3]):
-                canvas.create_text(cw // 2, y_r, text=f"{idx+1}. {jug}: {pts} pts", fill="#ffd700", font=("Arial", 8))
-                y_r += 16
+        dibujar_boton(off_x + 140, off_y + 420, off_x + 340, off_y + 470, "CANCELAR SALA", "#ff4444")
     else:
-        canvas.create_text(cw // 2, off_y + 335, text="🟡 CONECTADO A SERVIDOR RENDER", fill="#ffd700", font=("Arial", 9, "bold"))
-        canvas.create_text(cw // 2, off_y + 360, text="Sincronización online de puntos activa", fill="#a0a0c0", font=("Arial", 8))
+        canvas.create_rectangle(off_x + 30, off_y + 60, off_x + 450, off_y + 225, fill="#1c1c2b", outline="#ff007f", width=2)
+        canvas.create_text(cw // 2, off_y + 80, text="⚔️ REGLAS DE COMBATE MULTIJUGADOR", fill="#ffd700", font=("Arial", 11, "bold"))
 
-    dibujar_boton(off_x + 140, off_y + 465, off_x + 340, off_y + 515, "VOLVER AL MENÚ", "#a0a0c0")
+        reglas = [
+            ("• 2 Líneas (Doble):", "💣 Envia 1 Línea de Basura al rival"),
+            ("• 3 Líneas (Triple):", "💣 Envia 2 Líneas de Basura al rival"),
+            ("• 4 Líneas (Tetris):", "💣 Envia 4 Líneas de Basura al rival"),
+            ("• Combos Seguidos:", "💣 +1 Línea extra de basura por combo")
+        ]
+        y_reg = off_y + 105
+        for lab, val in reglas:
+            canvas.create_text(off_x + 50, y_reg, text=lab, fill="#ffffff", font=("Arial", 9, "bold"), anchor="w")
+            canvas.create_text(off_x + 210, y_reg, text=val, fill="#00e5ff", font=("Arial", 9), anchor="w")
+            y_reg += 24
+
+        dibujar_boton(off_x + 60, off_y + 240, off_x + 420, off_y + 285, "👑 CREAR SALA ONLINE", "#00e5ff", font_size=10)
+        dibujar_boton(off_x + 60, off_y + 295, off_x + 420, off_y + 340, "🔗 VINCULAR SALA (INGRESAR CÓDIGO)", "#ff007f", font_size=10)
+        dibujar_boton(off_x + 60, off_y + 350, off_x + 420, off_y + 395, "⚔️ MODO VERSUS LOCAL (IA / 2 PANTALLAS)", "#ffd700", font_size=9)
+
+        conectar_firebase()
+        if firebase_conectado:
+            canvas.create_text(cw // 2, off_y + 415, text="🟢 CONECTADO A FIREBASE FIRESTORE", fill="#00ff88", font=("Arial", 8, "bold"))
+        else:
+            canvas.create_text(cw // 2, off_y + 415, text="🟡 CONECTADO A SERVIDOR RENDER", fill="#ffd700", font=("Arial", 8, "bold"))
+
+        dibujar_boton(off_x + 140, off_y + 440, off_x + 340, off_y + 490, "VOLVER AL MENÚ", "#a0a0c0")
 
 def dibujar_pantalla_ajustes():
     off_x, off_y, cw, ch = obtener_offset_pantalla()
@@ -998,10 +1243,18 @@ def manejar_clic(event):
         if (off_x + ancho + 15) <= x <= (off_x + ancho + 165) and (off_y + 535) <= y <= (off_y + 580):
             pausar_y_abrir_opciones()
     elif estado_pantalla == "ONLINE":
-        if (off_x + 60) <= x <= (off_x + 420) and (off_y + 255) <= y <= (off_y + 310):
-            iniciar_modo_versus()
-        elif (off_x + 140) <= x <= (off_x + 340) and (off_y + 465) <= y <= (off_y + 515):
-            volver_al_menu()
+        if estado_sala_online == "ESPERANDO":
+            if (off_x + 140) <= x <= (off_x + 340) and (off_y + 420) <= y <= (off_y + 470):
+                cancelar_sala_online()
+        else:
+            if (off_x + 60) <= x <= (off_x + 420) and (off_y + 240) <= y <= (off_y + 285):
+                crear_sala_online()
+            elif (off_x + 60) <= x <= (off_x + 420) and (off_y + 295) <= y <= (off_y + 340):
+                vincular_sala_online()
+            elif (off_x + 60) <= x <= (off_x + 420) and (off_y + 350) <= y <= (off_y + 395):
+                iniciar_modo_versus()
+            elif (off_x + 140) <= x <= (off_x + 340) and (off_y + 440) <= y <= (off_y + 490):
+                volver_al_menu()
     elif estado_pantalla == "AJUSTES":
         if (off_x + 235) <= x <= (off_x + 415) and (off_y + 100) <= y <= (off_y + 135):
             sonido_activado = not sonido_activado
@@ -1108,7 +1361,7 @@ def fijar_pieza():
             reproducir_sonido("record")
         else:
             es_nuevo_record = False
-            reproducir_sonido("game_over")
+            reproducir_audio_efecto("game over.mp3")
         redibujar()
 
 def limpiar_filas():
@@ -1159,7 +1412,10 @@ def limpiar_filas():
             filas_ataque += 1
 
         if modo_juego == "VERSUS" and filas_ataque > 0:
-            agregar_lineas_basura(tablero_rival, filas_ataque)
+            if codigo_sala_actual:
+                enviar_basura_online(filas_ataque)
+            else:
+                agregar_lineas_basura(tablero_rival, filas_ataque)
             msg_ataque_rival = f"💣 ¡BASURA ENVIADA +{filas_ataque}!"
             msg_ataque_rival_tiempo = time.time()
     else:

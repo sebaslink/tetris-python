@@ -522,6 +522,68 @@ def add_score():
         })
     return jsonify({"status": "success", "total": len(puntuaciones)})
 
+"""
+API para Gestion de Salas Online
+"""
+@app.route("/api/salas/crear", methods=["POST"])
+def crear_sala_api():
+    data = request.get_json() or {}
+    codigo = str(data.get("codigo", ""))
+    if codigo:
+        salas[codigo] = {
+            "codigo": codigo,
+            "estado": "ESPERANDO",
+            "p1_tablero": [[0]*10 for _ in range(20)],
+            "p1_puntuacion": 0,
+            "p1_basura": 0,
+            "p1_terminado": False,
+            "p2_tablero": [[0]*10 for _ in range(20)],
+            "p2_puntuacion": 0,
+            "p2_basura": 0,
+            "p2_terminado": False
+        }
+        return jsonify({"status": "created", "codigo": codigo})
+    return jsonify({"status": "error"}), 400
+
+@app.route("/api/salas/unirse", methods=["POST"])
+def unirse_sala_api():
+    data = request.get_json() or {}
+    codigo = str(data.get("codigo", ""))
+    if codigo in salas:
+        salas[codigo]["estado"] = "JUGANDO"
+        return jsonify({"status": "joined", "codigo": codigo})
+    return jsonify({"status": "not_found"}), 404
+
+@app.route("/api/salas/<codigo>", methods=["GET"])
+def obtener_sala_api(codigo):
+    if codigo in salas:
+        return jsonify({"status": "ok", "sala": salas[codigo]})
+    return jsonify({"status": "not_found"}), 404
+
+@app.route("/api/salas/actualizar", methods=["POST"])
+def actualizar_sala_api():
+    data = request.get_json() or {}
+    codigo = str(data.get("codigo", ""))
+    rol = data.get("rol", "p1")
+    if codigo in salas:
+        s = salas[codigo]
+        if rol == "p1":
+            if "tablero" in data: s["p1_tablero"] = data["tablero"]
+            if "puntuacion" in data: s["p1_puntuacion"] = data["puntuacion"]
+            if "basura" in data: s["p2_basura"] += data["basura"]
+            if "terminado" in data: s["p1_terminado"] = data["terminado"]
+            res = {"tablero_rival": s["p2_tablero"], "puntuacion_rival": s["p2_puntuacion"], "basura": s["p1_basura"], "estado": s["estado"]}
+            s["p1_basura"] = 0
+        else:
+            if "tablero" in data: s["p2_tablero"] = data["tablero"]
+            if "puntuacion" in data: s["p2_puntuacion"] = data["puntuacion"]
+            if "basura" in data: s["p1_basura"] += data["basura"]
+            if "terminado" in data: s["p2_terminado"] = data["terminado"]
+            res = {"tablero_rival": s["p1_tablero"], "puntuacion_rival": s["p1_puntuacion"], "basura": s["p2_basura"], "estado": s["estado"]}
+            s["p2_basura"] = 0
+        return jsonify({"status": "ok", "datos": res})
+    return jsonify({"status": "not_found"}), 404
+
 @app.route("/download", methods=["GET"])
 def download_game():
     dist_dir = os.path.join(app.root_path, "dist")
