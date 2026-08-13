@@ -148,16 +148,18 @@ Calculo dinamico de offset de centrado al cambiar tamano de ventana
 def obtener_offset_pantalla():
     cw = canvas.winfo_width()
     ch = canvas.winfo_height()
+    ancho_requerido = (ancho * 2 + 320) if modo_juego == "VERSUS" else (ancho + 180)
     if cw < 10:
-        cw = ancho + 180
+        cw = ancho_requerido
     if ch < 10:
         ch = alto
-    off_x = max(0, (cw - (ancho + 180)) // 2)
+    off_x = max(0, (cw - ancho_requerido) // 2)
     off_y = max(0, (ch - alto) // 2)
     return off_x, off_y, cw, ch
 
 def dibujar_tablero():
     off_x, off_y, _, _ = obtener_offset_pantalla()
+    # Dibujar tablero Jugador 1
     for f in range(FILAS):
         for c in range(COLUMNAS):
             x1 = off_x + c * TAMANO_BLOQUE
@@ -167,6 +169,19 @@ def dibujar_tablero():
             color = str(tablero[f][c]) if isinstance(tablero[f][c], str) else ""
             outline_color = "#333348" if tablero[f][c] == 0 else "white"
             canvas.create_rectangle(x1, y1, x2, y2, outline=outline_color, fill=color)
+
+    # Dibujar tablero Rival en Modo Versus
+    if modo_juego == "VERSUS":
+        off_rival_x = off_x + ancho + 200
+        for f in range(FILAS):
+            for c in range(COLUMNAS):
+                x1 = off_rival_x + c * TAMANO_BLOQUE
+                y1 = off_y + f * TAMANO_BLOQUE
+                x2 = x1 + TAMANO_BLOQUE
+                y2 = y1 + TAMANO_BLOQUE
+                color = str(tablero_rival[f][c]) if isinstance(tablero_rival[f][c], str) else ""
+                outline_color = "#443344" if tablero_rival[f][c] == 0 else "#ff88aa"
+                canvas.create_rectangle(x1, y1, x2, y2, outline=outline_color, fill=color)
 
 
 """
@@ -233,6 +248,27 @@ texto_flotante_tiempo = 0.0
 estela_hard_drop_coords = None
 estela_hard_drop_tiempo = 0.0
 conteo_piezas = {'I': 0, 'O': 0, 'T': 0, 'S': 0, 'Z': 0, 'J': 0, 'L': 0}
+
+"""
+Estado y variables para Modo Versus (Doble Pantalla / Tetris 99)
+"""
+modo_juego = "SOLO"
+
+tablero_rival = [[0 for _ in range(COLUMNAS)] for _ in range(FILAS)]
+nombre_pieza_rival = random.choice(list(PIEZAS.keys()))
+nombre_siguiente_rival = random.choice(list(PIEZAS.keys()))
+pieza_actual_rival = PIEZAS[nombre_pieza_rival]
+colores_actual_rival = COLORES[nombre_pieza_rival]
+pos_x_rival = COLUMNAS // 2 - 1
+pos_y_rival = 0
+puntuacion_rival = 0
+lineas_rival = 0
+juego_terminado_rival = False
+
+msg_ataque_p1 = ""
+msg_ataque_p1_tiempo = 0.0
+msg_ataque_rival = ""
+msg_ataque_rival_tiempo = 0.0
 
 _cache_img_menu = None
 _cache_menu_size = (0, 0)
@@ -518,6 +554,98 @@ def dibujar_pieza():
                 y2 = y1 + TAMANO_BLOQUE
                 canvas.create_rectangle(x1, y1, x2, y2, fill=colores_actual, outline="white")
 
+    if modo_juego == "VERSUS":
+        off_rival_x = off_x + ancho + 200
+        for f_idx, fila in enumerate(pieza_actual_rival):
+            for c_idx, valor in enumerate(fila):
+                if valor:
+                    x1 = off_rival_x + (pos_x_rival + c_idx) * TAMANO_BLOQUE
+                    y1 = off_y + (pos_y_rival + f_idx) * TAMANO_BLOQUE
+                    x2 = x1 + TAMANO_BLOQUE
+                    y2 = y1 + TAMANO_BLOQUE
+                    canvas.create_rectangle(x1, y1, x2, y2, fill=colores_actual_rival, outline="white")
+
+"""
+Funciones de Ataque de Basura y Rival IA (Estilo Tetris 99)
+"""
+def agregar_lineas_basura(tab, cant):
+    if cant <= 0:
+        return
+    for _ in range(cant):
+        tab.pop(0)
+        hueco = random.randint(0, COLUMNAS - 1)
+        nueva_fila = ["#555566" if c != hueco else 0 for c in range(COLUMNAS)]
+        tab.append(nueva_fila)
+
+def es_valido_rival(pieza, p_x, p_y):
+    for f_idx, fila in enumerate(pieza):
+        for c_idx, valor in enumerate(fila):
+            if valor:
+                x = p_x + c_idx
+                y = p_y + f_idx
+                if x < 0 or x >= COLUMNAS or y >= FILAS:
+                    return False
+                if y >= 0 and tablero_rival[y][x] != 0:
+                    return False
+    return True
+
+def fijar_pieza_rival():
+    global pieza_actual_rival, colores_actual_rival, pos_x_rival, pos_y_rival, nombre_pieza_rival, nombre_siguiente_rival, juego_terminado_rival
+    for f_idx, fila in enumerate(pieza_actual_rival):
+        for c_idx, valor in enumerate(fila):
+            if valor:
+                if 0 <= pos_y_rival + f_idx < FILAS and 0 <= pos_x_rival + c_idx < COLUMNAS:
+                    tablero_rival[pos_y_rival + f_idx][pos_x_rival + c_idx] = colores_actual_rival
+
+    limpiar_filas_rival()
+    nombre_pieza_rival = nombre_siguiente_rival
+    nombre_siguiente_rival = random.choice(list(PIEZAS.keys()))
+    pieza_actual_rival = PIEZAS[nombre_pieza_rival]
+    colores_actual_rival = COLORES[nombre_pieza_rival]
+    pos_x_rival = COLUMNAS // 2 - 1
+    pos_y_rival = 0
+
+    if not es_valido_rival(pieza_actual_rival, pos_x_rival, pos_y_rival):
+        juego_terminado_rival = True
+        redibujar()
+
+def limpiar_filas_rival():
+    global tablero_rival, puntuacion_rival, lineas_rival, msg_ataque_p1, msg_ataque_p1_tiempo
+    nuevas = [f for f in tablero_rival if any(v == 0 for v in f)]
+    eliminadas = FILAS - len(nuevas)
+    if eliminadas > 0:
+        tablero_rival = [[0 for _ in range(COLUMNAS)] for _ in range(eliminadas)] + nuevas
+        lineas_rival += eliminadas
+        puntuacion_rival += eliminadas * 150
+
+        filas_ataque = 0
+        if eliminadas == 2: filas_ataque = 1
+        elif eliminadas == 3: filas_ataque = 2
+        elif eliminadas == 4: filas_ataque = 4
+
+        if modo_juego == "VERSUS" and filas_ataque > 0:
+            agregar_lineas_basura(tablero, filas_ataque)
+            msg_ataque_p1 = f"⚠️ ¡BASURA RECIBIDA +{filas_ataque}!"
+            msg_ataque_p1_tiempo = time.time()
+
+def caer_rival():
+    global pos_y_rival, pos_x_rival
+    if estado_pantalla != "JUEGO" or modo_juego != "VERSUS" or juego_terminado_rival or juego_en_pausa:
+        return
+
+    if random.random() < 0.35:
+        dx = random.choice([-1, 1])
+        if es_valido_rival(pieza_actual_rival, pos_x_rival + dx, pos_y_rival):
+            pos_x_rival += dx
+
+    if es_valido_rival(pieza_actual_rival, pos_x_rival, pos_y_rival + 1):
+        pos_y_rival += 1
+    else:
+        fijar_pieza_rival()
+
+    redibujar()
+    root.after(350, caer_rival)
+
 def caida_instantanea(event=None):
     global pos_y, puntuacion, estela_hard_drop_coords, estela_hard_drop_tiempo
     if estado_pantalla != "JUEGO" or juego_terminado:
@@ -709,47 +837,40 @@ def dibujar_menu_principal():
 def dibujar_pantalla_online():
     off_x, off_y, cw, ch = obtener_offset_pantalla()
     canvas.create_rectangle(0, 0, cw, ch, fill="#121218", outline="")
-    canvas.create_text(cw // 2, off_y + 55, text="MODO ONLINE / VERSUS", fill="#ff007f", font=("Arial", 20, "bold"))
-    
+    canvas.create_text(cw // 2, off_y + 35, text="MODO VERSUS / TETRIS 99", fill="#ff007f", font=("Arial", 20, "bold"))
+
+    # Tarjeta de Reglas de Combate
+    canvas.create_rectangle(off_x + 30, off_y + 60, off_x + 450, off_y + 240, fill="#1c1c2b", outline="#ff007f", width=2)
+    canvas.create_text(cw // 2, off_y + 80, text="⚔️ REGLAS DE COMBATE (ESTILO TETRIS 99)", fill="#ffd700", font=("Arial", 11, "bold"))
+
+    reglas = [
+        ("• 2 Líneas (Doble):", "💣 Envia 1 Línea de Basura al rival"),
+        ("• 3 Líneas (Triple):", "💣 Envia 2 Líneas de Basura al rival"),
+        ("• 4 Líneas (Tetris):", "💣 Envia 4 Líneas de Basura al rival"),
+        ("• Combos Seguidos:", "💣 +1 Línea extra de basura por combo")
+    ]
+    y_reg = off_y + 110
+    for lab, val in reglas:
+        canvas.create_text(off_x + 50, y_reg, text=lab, fill="#ffffff", font=("Arial", 9, "bold"), anchor="w")
+        canvas.create_text(off_x + 210, y_reg, text=val, fill="#00e5ff", font=("Arial", 9), anchor="w")
+        y_reg += 26
+
+    dibujar_boton(off_x + 60, off_y + 255, off_x + 420, off_y + 310, "⚔️ INICIAR MODO VERSUS (DOBLE PANTALLA)", "#ff007f", font_size=10)
+
     conectar_firebase()
-    
     if firebase_conectado:
-        canvas.create_rectangle(off_x + 40, off_y + 85, off_x + 440, off_y + 445, fill="#1f1f2e", outline="#00ff88", width=2)
-        canvas.create_text(cw // 2, off_y + 110, text="🟢 CONECTADO A FIREBASE FIRESTORE", fill="#00ff88", font=("Arial", 11, "bold"))
-        canvas.create_text(cw // 2, off_y + 130, text="Proyecto: tetrisonline-zodiacogame", fill="#a0a0c0", font=("Arial", 8))
-        
-        dibujar_boton(off_x + 90, off_y + 155, off_x + 390, off_y + 200, "🎮 CREAR SALA MULTIJUGADOR", "#00e5ff", font_size=10)
-        dibujar_boton(off_x + 90, off_y + 215, off_x + 390, off_y + 260, "🤖 JUGAR VS RIVAL (DEMO / IA)", "#ff007f", font_size=10)
-        dibujar_boton(off_x + 90, off_y + 275, off_x + 390, off_y + 320, "🏆 RANKING GLOBAL FIRESTORE", "#ffd700", font_size=10)
-        
+        canvas.create_text(cw // 2, off_y + 335, text="🟢 CONECTADO A FIREBASE FIRESTORE", fill="#00ff88", font=("Arial", 9, "bold"))
         ranking = obtener_ranking_firebase()
         if ranking:
-            canvas.create_text(cw // 2, off_y + 345, text="TOP 3 GLOBAL FIRESTORE:", fill="#ffffff", font=("Arial", 9, "bold"))
-            y_r = off_y + 368
+            canvas.create_text(cw // 2, off_y + 360, text="TOP 3 GLOBAL FIRESTORE:", fill="#ffffff", font=("Arial", 8, "bold"))
+            y_r = off_y + 380
             for idx, (jug, pts) in enumerate(ranking[:3]):
                 canvas.create_text(cw // 2, y_r, text=f"{idx+1}. {jug}: {pts} pts", fill="#ffd700", font=("Arial", 8))
-                y_r += 18
-        else:
-            canvas.create_text(cw // 2, off_y + 370, text="¡Conexión lista para subir récords!", fill="#a0a0c0", font=("Arial", 9, "italic"))
+                y_r += 16
     else:
-        canvas.create_rectangle(off_x + 40, off_y + 85, off_x + 440, off_y + 445, fill="#1f1f2e", outline="#ff4444", width=2)
-        canvas.create_text(cw // 2, off_y + 110, text="🟡 ESPERANDO CREDENCIALES FIRESTORE", fill="#ffd700", font=("Arial", 11, "bold"))
-        canvas.create_text(cw // 2, off_y + 135, text="Coloca tu archivo JSON de Firebase en la carpeta:", fill="#ffffff", font=("Arial", 8))
-        canvas.create_text(cw // 2, off_y + 155, text="firebase_key.json", fill="#00e5ff", font=("Arial", 10, "bold"))
-        
-        pasos = [
-            "1. Ve a Firebase Console > Configuración de Proyecto",
-            "2. Cuentas de servicio > Generar clave privada",
-            "3. Guarda el archivo como firebase_key.json"
-        ]
-        y_p = off_y + 190
-        for p in pasos:
-            canvas.create_text(off_x + 60, y_p, text=p, fill="#cccccc", font=("Arial", 8), anchor="w")
-            y_p += 22
-            
-        dibujar_boton(off_x + 90, off_y + 275, off_x + 390, off_y + 320, "🤖 PROBAR MODO VERSUS (DEMO / IA)", "#ff007f", font_size=9)
-        dibujar_boton(off_x + 110, off_y + 340, off_x + 370, off_y + 385, "🔄 RECOMPROBAR CONEXIÓN", "#00e5ff", font_size=9)
-        
+        canvas.create_text(cw // 2, off_y + 335, text="🟡 CONECTADO A SERVIDOR RENDER", fill="#ffd700", font=("Arial", 9, "bold"))
+        canvas.create_text(cw // 2, off_y + 360, text="Sincronización online de puntos activa", fill="#a0a0c0", font=("Arial", 8))
+
     dibujar_boton(off_x + 140, off_y + 465, off_x + 340, off_y + 515, "VOLVER AL MENÚ", "#a0a0c0")
 
 def dibujar_pantalla_ajustes():
@@ -831,7 +952,14 @@ def redibujar():
             canvas.create_text(off_x + ancho // 2 + 1, off_y + 220 - dy + 1, text=texto_flotante_msg, fill="#000000", font=("Arial", 16, "bold"))
             canvas.create_text(off_x + ancho // 2, off_y + 220 - dy, text=texto_flotante_msg, fill=texto_flotante_color, font=("Arial", 16, "bold"))
 
-        if juego_terminado:
+        if modo_juego == "VERSUS":
+            if msg_ataque_p1 and (time.time() - msg_ataque_p1_tiempo < 1.5):
+                canvas.create_text(off_x + ancho // 2, off_y + 140, text=msg_ataque_p1, fill="#ff4444", font=("Arial", 11, "bold"))
+            if msg_ataque_rival and (time.time() - msg_ataque_rival_tiempo < 1.5):
+                off_r = off_x + ancho + 200
+                canvas.create_text(off_r + ancho // 2, off_y + 140, text=msg_ataque_rival, fill="#00ff88", font=("Arial", 11, "bold"))
+
+        if juego_terminado or (modo_juego == "VERSUS" and juego_terminado_rival):
             dibujar_game_over()
 
 def reanudar_juego():
@@ -870,25 +998,10 @@ def manejar_clic(event):
         if (off_x + ancho + 15) <= x <= (off_x + ancho + 165) and (off_y + 535) <= y <= (off_y + 580):
             pausar_y_abrir_opciones()
     elif estado_pantalla == "ONLINE":
-        if firebase_conectado:
-            if (off_x + 90) <= x <= (off_x + 390) and (off_y + 155) <= y <= (off_y + 200):
-                crear_sala_firebase("Sala Tetris " + str(random.randint(100, 999)))
-                iniciar_un_solo_jugador()
-            elif (off_x + 90) <= x <= (off_x + 390) and (off_y + 215) <= y <= (off_y + 260):
-                iniciar_un_solo_jugador()
-            elif (off_x + 90) <= x <= (off_x + 390) and (off_y + 275) <= y <= (off_y + 320):
-                obtener_ranking_firebase()
-                redibujar()
-            elif (off_x + 140) <= x <= (off_x + 340) and (off_y + 465) <= y <= (off_y + 515):
-                volver_al_menu()
-        else:
-            if (off_x + 90) <= x <= (off_x + 390) and (off_y + 275) <= y <= (off_y + 320):
-                iniciar_un_solo_jugador()
-            elif (off_x + 110) <= x <= (off_x + 370) and (off_y + 340) <= y <= (off_y + 385):
-                conectar_firebase()
-                redibujar()
-            elif (off_x + 140) <= x <= (off_x + 340) and (off_y + 465) <= y <= (off_y + 515):
-                volver_al_menu()
+        if (off_x + 60) <= x <= (off_x + 420) and (off_y + 255) <= y <= (off_y + 310):
+            iniciar_modo_versus()
+        elif (off_x + 140) <= x <= (off_x + 340) and (off_y + 465) <= y <= (off_y + 515):
+            volver_al_menu()
     elif estado_pantalla == "AJUSTES":
         if (off_x + 235) <= x <= (off_x + 415) and (off_y + 100) <= y <= (off_y + 135):
             sonido_activado = not sonido_activado
@@ -999,7 +1112,7 @@ def fijar_pieza():
         redibujar()
 
 def limpiar_filas():
-    global tablero, puntuacion, lineas_totales, combo_actual, texto_flotante_msg, texto_flotante_color, texto_flotante_tiempo
+    global tablero, puntuacion, lineas_totales, combo_actual, texto_flotante_msg, texto_flotante_color, texto_flotante_tiempo, msg_ataque_rival, msg_ataque_rival_tiempo
     nuevas_filas = [fila for fila in tablero if any(valor == 0 for valor in fila)]
     filas_eliminadas = FILAS - len(nuevas_filas)
     if filas_eliminadas > 0:
@@ -1035,6 +1148,20 @@ def limpiar_filas():
                 texto_flotante_tiempo = time.time()
 
         puntuacion += pts_base + bonus_combo
+
+        # Sistema de Ataques de Basura (Estilo Tetris 99)
+        filas_ataque = 0
+        if filas_eliminadas == 2: filas_ataque = 1
+        elif filas_eliminadas == 3: filas_ataque = 2
+        elif filas_eliminadas == 4: filas_ataque = 4
+
+        if combo_actual > 1:
+            filas_ataque += 1
+
+        if modo_juego == "VERSUS" and filas_ataque > 0:
+            agregar_lineas_basura(tablero_rival, filas_ataque)
+            msg_ataque_rival = f"💣 ¡BASURA ENVIADA +{filas_ataque}!"
+            msg_ataque_rival_tiempo = time.time()
     else:
         combo_actual = 0
     return filas_eliminadas
@@ -1051,12 +1178,35 @@ def bajar_rapido():
 Navegacion y manejadores de eventos del raton
 """
 def iniciar_un_solo_jugador():
-    global estado_pantalla, juego_en_pausa
+    global estado_pantalla, modo_juego, juego_en_pausa
+    modo_juego = "SOLO"
     estado_pantalla = "JUEGO"
     juego_en_pausa = False
     reiniciar_juego()
     actualizar_musica_estado()
     caer()
+
+def iniciar_modo_versus():
+    global estado_pantalla, modo_juego, juego_en_pausa, tablero_rival, puntuacion_rival, lineas_rival, juego_terminado_rival, nombre_pieza_rival, nombre_siguiente_rival, pieza_actual_rival, colores_actual_rival, pos_x_rival, pos_y_rival
+    modo_juego = "VERSUS"
+    estado_pantalla = "JUEGO"
+    juego_en_pausa = False
+    reiniciar_juego()
+
+    tablero_rival = [[0 for _ in range(COLUMNAS)] for _ in range(FILAS)]
+    puntuacion_rival = 0
+    lineas_rival = 0
+    juego_terminado_rival = False
+    nombre_pieza_rival = random.choice(list(PIEZAS.keys()))
+    nombre_siguiente_rival = random.choice(list(PIEZAS.keys()))
+    pieza_actual_rival = PIEZAS[nombre_pieza_rival]
+    colores_actual_rival = COLORES[nombre_pieza_rival]
+    pos_x_rival = COLUMNAS // 2 - 1
+    pos_y_rival = 0
+
+    actualizar_musica_estado()
+    caer()
+    caer_rival()
 
 def pausar_y_abrir_opciones(event=None):
     global estado_pantalla, juego_en_pausa
