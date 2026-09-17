@@ -16,8 +16,9 @@ import time
 
 def obtener_ruta_recurso(ruta_relativa):
     """ Obtiene la ruta absoluta para un recurso, compatible con desarrollo y PyInstaller (onedir/onefile) """
-    if hasattr(sys, '_MEIPASS'):
-        ruta = os.path.join(sys._MEIPASS, ruta_relativa)
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        ruta = os.path.join(meipass, ruta_relativa)
         if os.path.exists(ruta):
             return ruta
 
@@ -65,8 +66,9 @@ def conectar_firebase():
         from firebase_admin import credentials, firestore
         
         directorios_busqueda = []
-        if hasattr(sys, '_MEIPASS'):
-            directorios_busqueda.append(sys._MEIPASS)
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            directorios_busqueda.append(meipass)
         if getattr(sys, 'frozen', False):
             directorios_busqueda.append(os.path.dirname(sys.executable))
         else:
@@ -324,6 +326,11 @@ def dibujar_tablero():
                 # Rejilla translúcida: permite ver claramente el fondo
                 canvas.create_rectangle(x1, y1, x2, y2, outline="#1a2538", fill="")
 
+    if modo_individual == "POWERUPS" and time.time() < tiempo_congelado_hasta:
+        seg = max(1, int(tiempo_congelado_hasta - time.time()) + 1)
+        canvas.create_rectangle(off_x, off_y, off_x + ancho, off_y + alto, outline="#00ffff", width=3)
+        canvas.create_text(off_x + ancho // 2, off_y + 16, text=f"❄️ ¡TIEMPO CONGELADO: {seg}s! ❄️", fill="#00ffff", font=("Arial", 10, "bold"))
+
     # Dibujar tablero Rival en Modo Versus
     if modo_juego == "VERSUS":
         off_rival_x = off_x + ancho + 200
@@ -435,7 +442,7 @@ opcion_modos_seleccionada = 0
 opcion_online_seleccionada = 0
 opcion_ajustes_seleccionada = 0
 
-modo_individual = "CLASICO"  # "CLASICO", "SPRINT", "BLITZ", "SURVIVAL", "CAOS"
+modo_individual = "CLASICO"  # "CLASICO", "SPRINT", "BLITZ", "SURVIVAL", "CAOS", "POWERUPS"
 tiempo_inicio_modo = 0.0
 tiempo_inicio_pausa = 0.0
 tiempo_pausado_total = 0.0
@@ -448,7 +455,13 @@ oleada_survival = 0
 es_victoria_modo = False
 tiempo_final_sprint = 0.0
 
-coords_btn_modos = [[0, 0, 0, 0] for _ in range(6)]
+# Variables del Modo Power-Ups
+energia_powerups = 0  # 0 a 100
+slots_powerups = ["BOMBA"]  # Comienza con una bomba de regalo
+tiempo_congelado_hasta = 0.0
+coords_btn_powerups = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+
+coords_btn_modos = [[0, 0, 0, 0] for _ in range(7)]
 coords_btn_gameover_restart = [0, 0, 0, 0]
 coords_btn_gameover_menu = [0, 0, 0, 0]
 
@@ -1501,11 +1514,14 @@ def reiniciar_timer_caer():
     if estado_pantalla != "JUEGO" or juego_terminado or juego_en_pausa or (modo_juego == "VERSUS" and juego_terminado_rival):
         return
 
-    nivel = min(10, 1 + puntuacion // 1000)
-    velocidad = max(80, 500 - (nivel - 1) * 45)
-    es_panico = any(any(val != 0 for val in fila) for fila in tablero[:7])
-    if es_panico:
-        velocidad = max(50, int(velocidad * 0.6))
+    if modo_individual == "POWERUPS" and time.time() < tiempo_congelado_hasta:
+        velocidad = 2800
+    else:
+        nivel = min(10, 1 + puntuacion // 1000)
+        velocidad = max(80, 500 - (nivel - 1) * 45)
+        es_panico = any(any(val != 0 for val in fila) for fila in tablero[:7])
+        if es_panico:
+            velocidad = max(50, int(velocidad * 0.6))
     timer_caer = root.after(velocidad, caer)
 
 def caer():
@@ -1637,6 +1653,18 @@ def dibujar_panel():
         canvas.create_rectangle(off_x + ancho + 10, off_y + 65, off_x + ancho + 170, off_y + 110, fill="", outline="#36364d")
         canvas.create_text(off_x + ancho + 90, off_y + 77, text="PUNTOS", fill="#a0a0c0", font=("Arial", 8, "bold"))
         canvas.create_text(off_x + ancho + 90, off_y + 95, text=str(puntuacion), fill="#e056fd", font=("Arial", 12, "bold"))
+    elif modo_individual == "POWERUPS":
+        canvas.create_rectangle(off_x + ancho + 10, off_y + 10, off_x + ancho + 170, off_y + 55, fill="", outline="#ff007f", width=2)
+        canvas.create_text(off_x + ancho + 90, off_y + 22, text="MODO POWER-UPS", fill="#ff77cc", font=("Arial", 8, "bold"))
+        canvas.create_text(off_x + ancho + 90, off_y + 40, text=f"PUNTOS {puntuacion}", fill="#ffd700", font=("Arial", 11, "bold"))
+
+        canvas.create_rectangle(off_x + ancho + 10, off_y + 65, off_x + ancho + 170, off_y + 110, fill="", outline="#36364d")
+        canvas.create_text(off_x + ancho + 90, off_y + 77, text=f"ENERGÍA PODER: {energia_powerups}%", fill="#00ff88" if energia_powerups >= 100 else "#00e5ff", font=("Arial", 7, "bold"))
+        canvas.create_rectangle(off_x + ancho + 20, off_y + 88, off_x + ancho + 160, off_y + 98, fill="#121218", outline="#00e5ff")
+        prog_p = min(1.0, energia_powerups / 100.0)
+        if prog_p > 0:
+            canvas.create_rectangle(off_x + ancho + 21, off_y + 89, off_x + ancho + 21 + int(138 * prog_p), off_y + 97, fill="#00ff88" if energia_powerups >= 100 else "#ff007f", outline="")
+        canvas.create_text(off_x + ancho + 90, off_y + 104, text=f"PODERES: {len(slots_powerups)} / 3 LISTOS", fill="#ffd700" if slots_powerups else "#777790", font=("Arial", 6, "bold"))
     else:
         canvas.create_rectangle(off_x + ancho + 10, off_y + 10, off_x + ancho + 170, off_y + 55, fill="", outline="#00e5ff", width=2)
         canvas.create_text(off_x + ancho + 90, off_y + 22, text="PUNTOS", fill="#a0a0c0", font=("Arial", 8, "bold"))
@@ -1664,23 +1692,54 @@ def dibujar_panel():
     else:
         canvas.create_text(off_x + ancho + 90, off_y + 315, text="[ C ]", fill="#666680", font=("Arial", 10))
 
-    canvas.create_rectangle(off_x + ancho + 10, off_y + 365, off_x + ancho + 170, off_y + 545, fill="", outline="#36364d")
-    canvas.create_text(off_x + ancho + 90, off_y + 378, text="CONTROLES INTERACTIVOS", fill="#a0a0c0", font=("Arial", 7, "bold"))
+    if modo_individual == "POWERUPS":
+        canvas.create_rectangle(off_x + ancho + 10, off_y + 365, off_x + ancho + 170, off_y + 422, fill="#150f22", outline="#ff007f", width=2)
+        canvas.create_text(off_x + ancho + 90, off_y + 375, text="⚡ ACTIVAR PODER [1] [2] [3] ⚡", fill="#ff77cc", font=("Arial", 6, "bold"))
 
-    dibujar_boton(off_x + ancho + 15, off_y + 390, off_x + ancho + 62, off_y + 422, "◀ IZQ", "#00e5ff", font_size=8)
-    dibujar_boton(off_x + ancho + 67, off_y + 390, off_x + ancho + 113, off_y + 422, "🔄 ROT", "#ffd700", font_size=8)
-    dibujar_boton(off_x + ancho + 118, off_y + 390, off_x + ancho + 165, off_y + 422, "DER ▶", "#00e5ff", font_size=8)
+        info_iconos = {"BOMBA": ("💣", "#ff4444", "#301010"), "LASER": ("⚡", "#00f0ff", "#102535"), "CONGELAR": ("❄️", "#70fff0", "#103030"), "LIMPIADOR": ("🧹", "#ffd700", "#302510")}
 
-    dibujar_boton(off_x + ancho + 15, off_y + 427, off_x + ancho + 87, off_y + 459, "▼ BAJAR", "#00ff88", font_size=8)
-    dibujar_boton(off_x + ancho + 93, off_y + 427, off_x + ancho + 165, off_y + 459, "⏬ CAÍDA", "#ff007f", font_size=8)
+        for s_idx in range(3):
+            sx1 = off_x + ancho + 15 + s_idx * 51
+            sx2 = sx1 + 47
+            sy1 = off_y + 386
+            sy2 = off_y + 417
+            coords_btn_powerups[s_idx] = [sx1, sy1, sx2, sy2]
+            if s_idx < len(slots_powerups):
+                pod = slots_powerups[s_idx]
+                ic, b_col, bg_col = info_iconos.get(pod, ("✨", "#ffffff", "#1f1f2e"))
+                dibujar_boton(sx1, sy1, sx2, sy2, f"{ic}[{s_idx+1}]", b_col, color_fondo=bg_col, font_size=8)
+            else:
+                dibujar_boton(sx1, sy1, sx2, sy2, f"[{s_idx+1}]", "#404055", color_fondo="#0d091a", color_texto="#555566", font_size=8)
 
-    dibujar_boton(off_x + ancho + 15, off_y + 464, off_x + ancho + 87, off_y + 496, "📦 GUARDAR", "#a0a0c0", font_size=7)
-    dibujar_boton(off_x + ancho + 93, off_y + 464, off_x + ancho + 165, off_y + 496, "🔄 REINICIAR", "#ff4444", font_size=7)
+        dibujar_boton(off_x + ancho + 15, off_y + 428, off_x + ancho + 62, off_y + 458, "◀ IZQ", "#00e5ff", font_size=8)
+        dibujar_boton(off_x + ancho + 67, off_y + 428, off_x + ancho + 113, off_y + 458, "🔄 ROT", "#ffd700", font_size=8)
+        dibujar_boton(off_x + ancho + 118, off_y + 428, off_x + ancho + 165, off_y + 458, "DER ▶", "#00e5ff", font_size=8)
 
-    btn_pausa_texto = "▶️ SEGUIR" if juego_en_pausa else "⏸️ PAUSA"
-    btn_pausa_color = "#00ff88" if juego_en_pausa else "#ffaa00"
-    dibujar_boton(off_x + ancho + 15, off_y + 501, off_x + ancho + 87, off_y + 537, btn_pausa_texto, btn_pausa_color, font_size=8)
-    dibujar_boton(off_x + ancho + 93, off_y + 501, off_x + ancho + 165, off_y + 537, "⚙️ OPCIONES", "#ffd700", font_size=8)
+        dibujar_boton(off_x + ancho + 15, off_y + 463, off_x + ancho + 87, off_y + 494, "▼ BAJAR", "#00ff88", font_size=8)
+        dibujar_boton(off_x + ancho + 93, off_y + 463, off_x + ancho + 165, off_y + 494, "⏬ CAÍDA", "#ff007f", font_size=8)
+
+        btn_pausa_texto = "▶️ SEGUIR" if juego_en_pausa else "⏸️ PAUSA"
+        btn_pausa_color = "#00ff88" if juego_en_pausa else "#ffaa00"
+        dibujar_boton(off_x + ancho + 15, off_y + 499, off_x + ancho + 87, off_y + 535, btn_pausa_texto, btn_pausa_color, font_size=8)
+        dibujar_boton(off_x + ancho + 93, off_y + 499, off_x + ancho + 165, off_y + 535, "⚙️ OPCIONES", "#ffd700", font_size=8)
+    else:
+        canvas.create_rectangle(off_x + ancho + 10, off_y + 365, off_x + ancho + 170, off_y + 545, fill="", outline="#36364d")
+        canvas.create_text(off_x + ancho + 90, off_y + 378, text="CONTROLES INTERACTIVOS", fill="#a0a0c0", font=("Arial", 7, "bold"))
+
+        dibujar_boton(off_x + ancho + 15, off_y + 390, off_x + ancho + 62, off_y + 422, "◀ IZQ", "#00e5ff", font_size=8)
+        dibujar_boton(off_x + ancho + 67, off_y + 390, off_x + ancho + 113, off_y + 422, "🔄 ROT", "#ffd700", font_size=8)
+        dibujar_boton(off_x + ancho + 118, off_y + 390, off_x + ancho + 165, off_y + 422, "DER ▶", "#00e5ff", font_size=8)
+
+        dibujar_boton(off_x + ancho + 15, off_y + 427, off_x + ancho + 87, off_y + 459, "▼ BAJAR", "#00ff88", font_size=8)
+        dibujar_boton(off_x + ancho + 93, off_y + 427, off_x + ancho + 165, off_y + 459, "⏬ CAÍDA", "#ff007f", font_size=8)
+
+        dibujar_boton(off_x + ancho + 15, off_y + 464, off_x + ancho + 87, off_y + 496, "📦 GUARDAR", "#a0a0c0", font_size=7)
+        dibujar_boton(off_x + ancho + 93, off_y + 464, off_x + ancho + 165, off_y + 496, "🔄 REINICIAR", "#ff4444", font_size=7)
+
+        btn_pausa_texto = "▶️ SEGUIR" if juego_en_pausa else "⏸️ PAUSA"
+        btn_pausa_color = "#00ff88" if juego_en_pausa else "#ffaa00"
+        dibujar_boton(off_x + ancho + 15, off_y + 501, off_x + ancho + 87, off_y + 537, btn_pausa_texto, btn_pausa_color, font_size=8)
+        dibujar_boton(off_x + ancho + 93, off_y + 501, off_x + ancho + 165, off_y + 537, "⚙️ OPCIONES", "#ffd700", font_size=8)
 
     if musica_activada and cancion_reproduciendose:
         nombre_pista = os.path.splitext(cancion_reproduciendose)[0]
@@ -1711,6 +1770,8 @@ def dibujar_game_over():
         borde_color = "#ff5500"
     elif modo_individual == "CAOS":
         borde_color = "#e056fd"
+    elif modo_individual == "POWERUPS":
+        borde_color = "#ff007f"
 
     canvas.create_rectangle(x1, y1, x2, y2, fill="#1c1c28", outline=borde_color, width=3)
 
@@ -1736,6 +1797,9 @@ def dibujar_game_over():
     elif modo_individual == "CAOS":
         titulo = "FIN DEL CAOS"
         color_tit = "#e056fd"
+    elif modo_individual == "POWERUPS":
+        titulo = "FIN DEL MODO PODERES"
+        color_tit = "#ff007f"
     else:
         titulo = "GAME OVER"
         color_tit = "#ff4444"
@@ -1755,6 +1819,8 @@ def dibujar_game_over():
         canvas.create_text(cx, y1 + 56, text=f"🌋 OLEADAS RESISTIDAS: {oleada_survival} 🌋", fill="#ff5500", font=("Arial", 11, "bold"))
     elif modo_individual == "CAOS":
         canvas.create_text(cx, y1 + 56, text="🎲 CAOS & TRAMPAS SUPERADAS 🎲", fill="#e056fd", font=("Arial", 11, "bold"))
+    elif modo_individual == "POWERUPS":
+        canvas.create_text(cx, y1 + 56, text="💥 ¡PODERES Y BOMBAS DOMINADOS! 💥", fill="#ff77cc", font=("Arial", 11, "bold"))
     elif modo_juego == "VERSUS" and es_victoria:
         canvas.create_text(cx, y1 + 56, text="👑 ¡HAS DERROTADO AL RIVAL! 👑", fill="#00ff88", font=("Arial", 11, "bold"))
 
@@ -2198,54 +2264,54 @@ def dibujar_pantalla_modos():
 
     cx = cw // 2
 
-    # Adaptar tamaños según resolución de pantalla vertical y horizontal
+    # Adaptar tamaños según resolución de pantalla vertical y horizontal (7 botones)
     if ch < 680 or cw < 600:
         bw = min(420, max(280, int(cw * 0.88)))
-        bh = 30
-        espacio = 4
-        pad_x = 12
-        pad_y = 6
-        font_header = 12
+        bh = 26
+        espacio = 3
+        pad_x = 10
+        pad_y = 5
+        font_header = 11
         font_sub = 7
         font_tit = 8
-        font_desc = 7
-        y_header_offset = 6
-        header_text_gap = 13
-        header_sub_gap = 9
-        header_div_gap = 6
+        font_desc = 6
+        y_header_offset = 5
+        header_text_gap = 12
+        header_sub_gap = 8
+        header_div_gap = 5
     elif ch < 860:
         # Pantallas estándar maximizadas (1366x768, 720p, 1080p con escalado)
         bw = min(520, max(360, int(cw * 0.46)))
-        bh = 35
-        espacio = 5
-        pad_x = 20
-        pad_y = 9
+        bh = 32
+        espacio = 4
+        pad_x = 18
+        pad_y = 8
         font_header = 14
         font_sub = 8
-        font_tit = 10
-        font_desc = 8
-        y_header_offset = 8
-        header_text_gap = 16
-        header_sub_gap = 11
-        header_div_gap = 7
+        font_tit = 9
+        font_desc = 7
+        y_header_offset = 6
+        header_text_gap = 15
+        header_sub_gap = 10
+        header_div_gap = 6
     else:
         # Pantallas grandes Full HD o superiores sin escalado
         bw = min(560, max(400, int(cw * 0.42)))
-        bh = 42
-        espacio = 7
-        pad_x = 24
-        pad_y = 12
-        font_header = 17
+        bh = 38
+        espacio = 6
+        pad_x = 22
+        pad_y = 10
+        font_header = 16
         font_sub = 9
-        font_tit = 11
+        font_tit = 10
         font_desc = 8
-        y_header_offset = 12
-        header_text_gap = 19
-        header_sub_gap = 13
-        header_div_gap = 9
+        y_header_offset = 10
+        header_text_gap = 18
+        header_sub_gap = 12
+        header_div_gap = 8
 
     h_header = pad_y + y_header_offset + header_text_gap + header_sub_gap + header_div_gap
-    total_botones_h = 6 * bh + 5 * espacio
+    total_botones_h = 7 * bh + 6 * espacio
     card_h = h_header + total_botones_h + pad_y
     card_w = bw + pad_x * 2
 
@@ -2291,6 +2357,7 @@ def dibujar_pantalla_modos():
         ("⏱️  BLITZ (2 MINUTOS)", "Máxima puntuación en 120 segundos contra el cronómetro", "#ffd700", "#353010"),
         ("🌋  SUPERVIVENCIA", "Resiste oleadas continuas de basura cada 12 segundos", "#ff5500", "#3d1a10"),
         ("🎲  MODO CAOS / TRAMPAS", "Piezas 100% impredecibles, bloques gigantes y piezas trampa", "#e056fd", "#35103a"),
+        ("💥  MODO POWER-UPS", "Bombas, rayos láser, congelación y purga de bloques", "#ff007f", "#3a1025"),
         ("◀  VOLVER AL MENÚ", "Regresar a la pantalla principal", "#a0a0c0", "#20202d")
     ]
 
@@ -2564,6 +2631,8 @@ def manejar_clic(event):
                 elif idx == 4:
                     iniciar_modo_individual("CAOS")
                 elif idx == 5:
+                    iniciar_modo_individual("POWERUPS")
+                elif idx == 6:
                     volver_al_menu()
                 return
     elif estado_pantalla == "JUEGO":
@@ -2577,6 +2646,37 @@ def manejar_clic(event):
                 reproducir_sonido("menu_select")
                 volver_al_menu()
                 return
+
+        if modo_individual == "POWERUPS":
+            for p_idx, p_coords in enumerate(coords_btn_powerups):
+                if p_coords[0] <= x <= p_coords[2] and p_coords[1] <= y <= p_coords[3]:
+                    activar_powerup(p_idx)
+                    return
+            if (off_y + 428) <= y <= (off_y + 458):
+                if (off_x + ancho + 15) <= x <= (off_x + ancho + 62):
+                    mover(-1)
+                    return
+                elif (off_x + ancho + 67) <= x <= (off_x + ancho + 113):
+                    intentar_rotar()
+                    return
+                elif (off_x + ancho + 118) <= x <= (off_x + ancho + 165):
+                    mover(1)
+                    return
+            elif (off_y + 463) <= y <= (off_y + 494):
+                if (off_x + ancho + 15) <= x <= (off_x + ancho + 87):
+                    bajar_rapido()
+                    return
+                elif (off_x + ancho + 93) <= x <= (off_x + ancho + 165):
+                    caida_instantanea()
+                    return
+            elif (off_y + 499) <= y <= (off_y + 535):
+                if (off_x + ancho + 15) <= x <= (off_x + ancho + 87):
+                    alternar_pausa()
+                    return
+                elif (off_x + ancho + 93) <= x <= (off_x + ancho + 165):
+                    pausar_y_abrir_opciones()
+                    return
+            return
 
         if (off_y + 390) <= y <= (off_y + 422):
             if (off_x + ancho + 15) <= x <= (off_x + ancho + 62):
@@ -2673,6 +2773,91 @@ def alternar_pantalla_completa(event=None):
 canvas.bind("<Button-1>", manejar_clic)
 canvas.bind("<Configure>", lambda e: redibujar())
 
+def activar_powerup(idx):
+    global slots_powerups, tiempo_congelado_hasta, texto_flotante_msg, texto_flotante_color, texto_flotante_tiempo, puntuacion, tablero
+    if modo_individual != "POWERUPS" or estado_pantalla != "JUEGO" or juego_terminado or juego_en_pausa:
+        return
+    if idx < 0 or idx >= len(slots_powerups):
+        return
+    poder = slots_powerups.pop(idx)
+    off_x, off_y, _, _ = obtener_offset_pantalla()
+
+    if poder == "BOMBA":
+        cx = max(1, min(COLUMNAS - 2, pos_x + 1))
+        cy = max(1, min(FILAS - 2, pos_y + 1))
+        bloques = 0
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                ny, nx = cy + dy, cx + dx
+                if 0 <= ny < FILAS and 0 <= nx < COLUMNAS:
+                    if tablero[ny][nx] != 0:
+                        bloques += 1
+                    tablero[ny][nx] = 0
+        centro_x = off_x + (cx + 0.5) * TAMANO_BLOQUE
+        centro_y = off_y + (cy + 0.5) * TAMANO_BLOQUE
+        agregar_particulas_impacto(centro_x, centro_y, color="#ff3838", cantidad=30, velocidad=9.0)
+        agregar_particulas_impacto(centro_x, centro_y, color="#ffd700", cantidad=20, velocidad=6.0)
+        reproducir_sonido("explosion")
+        pts = 300 + bloques * 50
+        puntuacion += pts
+        texto_flotante_msg = f"💣 ¡BOMBA DETONADA! +{pts} 💣"
+        texto_flotante_color = "#ff4444"
+        texto_flotante_tiempo = time.time()
+        limpiar_filas()
+        redibujar()
+
+    elif poder == "LASER":
+        c1 = max(0, min(COLUMNAS - 2, pos_x))
+        c2 = c1 + 1
+        bloques = 0
+        for y in range(FILAS):
+            if tablero[y][c1] != 0:
+                bloques += 1
+            if tablero[y][c2] != 0:
+                bloques += 1
+            tablero[y][c1] = 0
+            tablero[y][c2] = 0
+        for y in range(0, FILAS, 2):
+            agregar_particulas_impacto(off_x + (c1 + 1) * TAMANO_BLOQUE, off_y + y * TAMANO_BLOQUE, color="#00f0ff", cantidad=6, velocidad=5.0)
+            agregar_particulas_impacto(off_x + (c1 + 1) * TAMANO_BLOQUE, off_y + y * TAMANO_BLOQUE, color="#ff00ff", cantidad=4, velocidad=4.0)
+        reproducir_sonido("tetris")
+        pts = 400 + bloques * 40
+        puntuacion += pts
+        texto_flotante_msg = f"⚡ ¡LÁSER PURGADOR! +{pts} ⚡"
+        texto_flotante_color = "#00f0ff"
+        texto_flotante_tiempo = time.time()
+        limpiar_filas()
+        redibujar()
+
+    elif poder == "CONGELAR":
+        tiempo_congelado_hasta = time.time() + 8.0
+        reproducir_sonido("hold")
+        off_x, off_y, _, _ = obtener_offset_pantalla()
+        agregar_particulas_impacto(off_x + ancho // 2, off_y + alto // 2, color="#70fff0", cantidad=35, velocidad=7.0)
+        texto_flotante_msg = "❄️ ¡TIEMPO CONGELADO (8s)! ❄️"
+        texto_flotante_color = "#00ffff"
+        texto_flotante_tiempo = time.time()
+        reiniciar_timer_caer()
+        redibujar()
+
+    elif poder == "LIMPIADOR":
+        filas_con_bloques = [y for y in range(FILAS) if any(tablero[y][x] != 0 for x in range(COLUMNAS))]
+        borrar = filas_con_bloques[-4:] if len(filas_con_bloques) >= 4 else filas_con_bloques
+        for y in borrar:
+            for x in range(COLUMNAS):
+                tablero[y][x] = 0
+        nuevas = [f for idx, f in enumerate(tablero) if idx not in borrar]
+        vacias: list[list[int | str]] = [[0 for _ in range(COLUMNAS)] for _ in range(len(borrar))]
+        tablero = vacias + nuevas
+        reproducir_sonido("level_up")
+        off_x, off_y, _, _ = obtener_offset_pantalla()
+        agregar_particulas_impacto(off_x + ancho // 2, off_y + alto - 60, color="#ffd700", cantidad=30, velocidad=8.0)
+        puntuacion += 500
+        texto_flotante_msg = "🧹 ¡SUELO LIMPIADO! +500 🧹"
+        texto_flotante_color = "#ffd700"
+        texto_flotante_tiempo = time.time()
+        redibujar()
+
 def guardar_pieza():
     global pieza_actual, colores_actual, pos_x, pos_y, nombre_pieza, nombre_siguiente_pieza, nombre_pieza_guardada, puede_guardar, conteo_piezas
     if estado_pantalla != "JUEGO" or not puede_guardar or juego_terminado or juego_en_pausa or (modo_juego == "VERSUS" and juego_terminado_rival):
@@ -2693,7 +2878,7 @@ def guardar_pieza():
     redibujar()
 
 def reiniciar_juego():
-    global tablero, puntuacion, nombre_pieza, nombre_siguiente_pieza, pieza_actual, colores_actual, pos_x, pos_y, nombre_pieza_guardada, puede_guardar, juego_terminado, juego_terminado_rival, es_nuevo_record, lineas_totales, combo_actual, conteo_piezas, bolsa_piezas_p1, tiempo_inicio_modo, tiempo_pausado_total, tiempo_inicio_pausa, oleada_survival, es_victoria_modo, tiempo_final_sprint
+    global tablero, puntuacion, nombre_pieza, nombre_siguiente_pieza, pieza_actual, colores_actual, pos_x, pos_y, nombre_pieza_guardada, puede_guardar, juego_terminado, juego_terminado_rival, es_nuevo_record, lineas_totales, combo_actual, conteo_piezas, bolsa_piezas_p1, tiempo_inicio_modo, tiempo_pausado_total, tiempo_inicio_pausa, oleada_survival, es_victoria_modo, tiempo_final_sprint, energia_powerups, slots_powerups, tiempo_congelado_hasta
     detener_timers_juego()
     tablero = [[0 for _ in range(COLUMNAS)] for _ in range(FILAS)]
     puntuacion = 0
@@ -2705,6 +2890,9 @@ def reiniciar_juego():
     tiempo_inicio_modo = time.time()
     tiempo_pausado_total = 0.0
     tiempo_inicio_pausa = 0.0
+    energia_powerups = 0
+    slots_powerups = ["BOMBA"] if modo_individual == "POWERUPS" else []
+    tiempo_congelado_hasta = 0.0
     conteo_piezas = {k: 0 for k in PIEZAS}
     es_nuevo_record = False
     bolsa_piezas_p1 = rellenar_bolsa_7() + rellenar_bolsa_7()
@@ -2801,7 +2989,7 @@ def fijar_pieza(es_hard_drop=False):
         redibujar()
 
 def limpiar_filas():
-    global tablero, puntuacion, lineas_totales, combo_actual, texto_flotante_msg, texto_flotante_color, texto_flotante_tiempo, msg_ataque_rival, msg_ataque_rival_tiempo, juego_terminado, es_victoria_modo, tiempo_final_sprint
+    global tablero, puntuacion, lineas_totales, combo_actual, texto_flotante_msg, texto_flotante_color, texto_flotante_tiempo, msg_ataque_rival, msg_ataque_rival_tiempo, juego_terminado, es_victoria_modo, tiempo_final_sprint, energia_powerups, slots_powerups
     indices_completos = [idx for idx, fila in enumerate(tablero) if all(valor != 0 for valor in fila)]
     filas_eliminadas = len(indices_completos)
     if filas_eliminadas > 0:
@@ -2810,6 +2998,19 @@ def limpiar_filas():
         tablero = filas_vacias + nuevas_filas
         lineas_totales += filas_eliminadas
         combo_actual += 1
+
+        if modo_individual == "POWERUPS":
+            energia_ganada = filas_eliminadas * 25
+            energia_powerups = min(100, energia_powerups + energia_ganada)
+            if energia_powerups >= 100:
+                if len(slots_powerups) < 3:
+                    nuevo_poder = random.choice(["BOMBA", "LASER", "CONGELAR", "LIMPIADOR"])
+                    slots_powerups.append(nuevo_poder)
+                    energia_powerups = 0
+                    reproducir_sonido("record")
+                    texto_flotante_msg = f"✨ ¡PODER LISTO: {nuevo_poder}! ✨"
+                    texto_flotante_color = "#ff77cc"
+                    texto_flotante_tiempo = time.time()
 
         if modo_individual == "SPRINT" and lineas_totales >= lineas_objetivo_sprint:
             juego_terminado = True
@@ -2970,7 +3171,7 @@ def navegar_menu(delta):
         reproducir_sonido("menu_move")
         redibujar()
     elif estado_pantalla == "MODOS":
-        opcion_modos_seleccionada = (opcion_modos_seleccionada + delta) % 6
+        opcion_modos_seleccionada = (opcion_modos_seleccionada + delta) % 7
         reproducir_sonido("menu_move")
         redibujar()
     elif estado_pantalla == "ONLINE":
@@ -3022,6 +3223,8 @@ def seleccionar_opcion_menu():
         elif opcion_modos_seleccionada == 4:
             iniciar_modo_individual("CAOS")
         elif opcion_modos_seleccionada == 5:
+            iniciar_modo_individual("POWERUPS")
+        elif opcion_modos_seleccionada == 6:
             volver_al_menu()
     elif estado_pantalla == "ONLINE":
         reproducir_sonido("menu_select")
@@ -3074,6 +3277,13 @@ root.bind("<Return>", lambda e: seleccionar_opcion_menu())
 root.bind("<KP_Enter>", lambda e: seleccionar_opcion_menu())
 root.bind("<space>", lambda e: seleccionar_opcion_menu() if estado_pantalla in ["MENU", "MODOS", "INTRO"] else caida_instantanea())
 root.bind("<Escape>", lambda e: volver_al_menu() if (estado_pantalla in ["MODOS", "ONLINE", "AJUSTES"] or (estado_pantalla == "JUEGO" and (juego_terminado or (modo_juego == "VERSUS" and juego_terminado_rival)))) else pausar_y_abrir_opciones(e))
+
+root.bind("1", lambda e: activar_powerup(0) if estado_pantalla == "JUEGO" else None)
+root.bind("<KP_1>", lambda e: activar_powerup(0) if estado_pantalla == "JUEGO" else None)
+root.bind("2", lambda e: activar_powerup(1) if estado_pantalla == "JUEGO" else None)
+root.bind("<KP_2>", lambda e: activar_powerup(1) if estado_pantalla == "JUEGO" else None)
+root.bind("3", lambda e: activar_powerup(2) if estado_pantalla == "JUEGO" else None)
+root.bind("<KP_3>", lambda e: activar_powerup(2) if estado_pantalla == "JUEGO" else None)
 
 for k in ["<KeyPress-Left>", "<KeyPress-a>", "<KeyPress-A>"]:
     root.bind(k, on_press_left)
